@@ -1,6 +1,7 @@
 import json
 import urllib.request
 import tarfile
+import re
 
 packages = []
 branch = ["edge"]
@@ -12,17 +13,20 @@ mirror = "https://mirrors.tuna.tsinghua.edu.cn/alpine"
 
 # https://mirrors.tuna.tsinghua.edu.cn/alpine/edge/main/x86_64/APKINDEX.tar.gz
 
+
 def parser_apkindex(data, bra, repo):
     package = {}
     for line in data.split('\n'):
         if line == '':
             if package:
-                package["id"] = f"{bra}-{repo}-" + package["P"]
+                package["id"] = f"{bra}-{repo}-" + \
+                    re.sub(r'[^\w-]', '_', package["P"])
                 packages.append(package)
                 package = {}
         else:
             key, value = line.split(':', 1)
             package[key] = value.strip()
+
 
 for bra in branch:
     for repo in repository:
