@@ -23,10 +23,6 @@ def parser_apkindex(data, bra, repo):
         else:
             key, value = line.split(':', 1)
             package[key] = value.strip()
-    if package:
-        print(package)
-        packages.append(package)
-
 
 for bra in branch:
     for repo in repository:
@@ -36,12 +32,11 @@ for bra in branch:
         )
         with tarfile.open(file, "r:gz") as tar:
             tar.extractall()
-
         with open('APKINDEX', 'r', encoding="utf-8") as input_file:
             data = input_file.read()
             parser_apkindex(data, bra, repo)
 
-print(len(packages))
+print("all:", len(packages))
 
 with open('data.json', 'w') as jsonfile:
     json.dump(packages, jsonfile)
