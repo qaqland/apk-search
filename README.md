@@ -1,50 +1,22 @@
-# apk search json
+# apk search
 
-Example package: `aaudit`
+Alpine Linux Packages Search Not Official :3
 
-Offical package details: <https://pkgs.alpinelinux.org/package/edge/main/x86_64/aaudit>
+Website 👉 <https://alpine.qaq.land/>
 
-After run `py apk.py` we can get one json as below
+Now support: edge with x86_64
 
-```json
-[
-  {
-    "C": "Q1BawafBgSS1e6GBSZxoKehEolr1A=",
-    "P": "aaudit",
-    "V": "0.7.2-r3",
-    "A": "x86_64",
-    "S": "3394",
-    "I": "49152",
-    "T": "Alpine Auditor",
-    "U": "https://alpinelinux.org",
-    "L": "Unknown",
-    "o": "aaudit",
-    "m": "Timo Ter\u00e4s <timo.teras@iki.fi>",
-    "t": "1659792088",
-    "c": "0714a84b7f79009ae8b96aef50216ed72f54b885",
-    "D": "lua5.2 lua5.2-posix lua5.2-cjson lua5.2-pc lua5.2-socket",
-    "p": "cmd:aaudit=0.7.2-r3",
-    "id": "edge-main-aaudit"
-  }
-]
-```
+## Tips
 
-APKINDEX Format see offical wiki: <https://wiki.alpinelinux.org/wiki/Apk_spec>
+1. Click the package name to see the details in alpine linux official website.
+2. Click the package description to copy package name to clipboard.
 
-Some fields are useless in our search, what we need are:
+## Thanks
 
-- P: Package
-- V: Version
-- A: Architecture
-- S: Size
-- I: Installed size
-- T: Description
-- U: Project
-- L: License
-- o: Origin
-- m: Maintainer
-- t: Build time
-- c: Commit
-- D: Depends
+- [Mithril.js](https://mithril.js.org/)
+- [MeiliSearch](https://www.meilisearch.com/)
+- [PicoCSS](https://picocss.com/)
 
-The last `id` is made for Meilisearch UUID
+---
+
+If there are any bugs, it's all ChatGPT's fault! 🙀

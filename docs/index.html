@@ -26,6 +26,10 @@
         margin-right: 8px;
         margin-bottom: 5px;
     }
+
+    .cursor {
+        cursor: pointer;
+    }
 </style>
 
 <body>
@@ -41,6 +45,7 @@
             hits: [
                 {
                     id: "edge-community-wlroots-dev",
+                    re: "community",
                     C: "Q1gYOH8U8jBA3Ve1Kiguwe4fm3YUM=",
                     P: "wlroots-dev",
                     V: "0.16.2-r2",
@@ -59,6 +64,7 @@
                 },
                 {
                     id: "edge-community-wofi-dev",
+                    re: "community",
                     C: "Q1lEyVt/39OsoBD1a0BozQx7KdjPQ=",
                     P: "wofi-dev",
                     V: "1.3-r0",
@@ -80,9 +86,25 @@
         // Hello is welcome and search input
         const Hello = {
             oninit: (vnode) => {
-                vnode.state.query = "";
-                vnode.state.busy = false;
+                vnode.state.query = "gcc";
+                vnode.state.busy = "false";
                 vnode.state.Results = { hits: [] };
+            },
+            search: async (vnode) => {
+                vnode.state.busy = "true";
+                m.redraw();
+                try {
+                    const query = vnode.state.query;
+                    const response = await client
+                        .index("apk")
+                        .search(query);
+                    vnode.state.Results.hits =
+                        response.hits; // save results
+                    console.log(response.hits);
+                } finally {
+                    vnode.state.busy = "false";
+                    m.redraw();
+                }
             },
             view: (vnode) => {
                 return m("main", { class: "container" }, [
@@ -90,7 +112,7 @@
                         "Alpine Linux Packages Search Not Official :3",
                     ),
                     m("p", { class: "" },
-                        "Powered by MeiliSearch and source code is on qaqland's GitHub. Only support edge and x86_64.",
+                        "Powered by Meilisearch and source code is on qaqland's GitHub. Only support edge and x86_64.",
                     ),
                     m("div", { class: "grid" }, [
                         // search input
@@ -98,66 +120,35 @@
                             type: "text",
                             placeholder: "Package Name",
                             value: vnode.state.query,
-                            oninput: (e) =>
-                                (vnode.state.query = e.target.value),
+                            oncreate: (vnode) => vnode.dom.focus(),
+                            oninput: (e) => (vnode.state.query = e.target.value),
                             onkeydown: async (e) => {
                                 if (e.key === "Enter") {
-                                    vnode.state.busy = true;
-                                    m.redraw();
-                                    try {
-                                        const query = vnode.state.query;
-                                        const response = await client
-                                            .index("apk")
-                                            .search(query);
-                                        vnode.state.Results.hits =
-                                            response.hits; // save results
-                                        // console.log(response.hits);
-                                    } finally {
-                                        vnode.state.busy = false;
-                                        m.redraw();
-                                    }
+                                    await Hello.search(vnode);
                                 }
                             },
                         }),
                         // search button
                         m("button", {
-                            class: "contrast outline",
+                            class: "outline",
                             "aria-busy": vnode.state.busy,
                             onclick: async (event) => {
-                                vnode.state.busy = true;
-                                console.log(vnode.state.busy);
-                                m.redraw();
-                                try {
-                                    const query =
-                                        event.target.previousSibling
-                                            .value;
-                                    const response = await client
-                                        .index("apk")
-                                        .search(query);
-                                    vnode.state.Results.hits =
-                                        response.hits;
-                                } finally {
-                                    vnode.state.busy = false;
-                                    console.log(vnode.state.busy);
-                                    m.redraw();
-                                }
+                                await Hello.search(vnode);
                             },
                         },
                             "Search",
                         ),
                     ]),
                     // m(World, { Results: test }), // test results
-                    m(World, { Results: vnode.state.Results }), // transform results
+                    m(World, { Results: vnode.state.Results }), // passing results
                 ]);
             },
         };
         // World is search results
         const World = {
-            packageName: (packageName) => {
+            packageName: (packageName, repository) => {
                 return m("a", {
-                    href:
-                        "https://pkgs.alpinelinux.org/package/edge/main/x86_64/" +
-                        packageName,
+                    href: `https://pkgs.alpinelinux.org/package/edge/${repository}/x86_64/${packageName}`,
                     target: "_blank",
                 },
                     m("b", { class: "blank" }, packageName),
@@ -165,19 +156,16 @@
             },
             packageDescription: (packageName, description) => {
                 return m("span", {
-                    class: "",
+                    class: "cursor",
                     onclick: async () => {
                         try {
-                            await navigator.clipboard.writeText(
-                                packageName,
-                            );
+                            await navigator.clipboard.writeText(packageName,);
                             console.log("copied:", packageName);
                         } catch (err) {
                             console.error("not copied..: ", err);
                         }
                     },
-                },
-                    description,
+                }, description,
                 );
             },
             packageSize: (packageSize, installSize) => {
@@ -188,7 +176,7 @@
                     installSize = (installSize / 1024).toFixed(2);
                 }
                 return m("code", { class: "blank" },
-                    `↓ ${packageSize} / ${installSize} ${units[index]}`,
+                    `${packageSize} → ${installSize} ${units[index]}`,
                 );
             },
             packageOrigin: (packageName, origin) => {
@@ -199,13 +187,14 @@
                 return m("ul",
                     vnode.attrs.Results.hits.map((hit) => {
                         return m("li", { class: "search-result" }, [
-                            World.packageName(hit.P),
+                            World.packageName(hit.P, hit.re),
                             World.packageDescription(hit.P, hit.T),
                             m("br"),
                             m("code", { class: "blank" }, "v" + hit.V), // Package Version
-                            m("code", { class: "blank" }, hit.L), // Package License
                             World.packageSize(hit.S, hit.I),
+                            m("code", { class: "blank" }, "#" + hit.re), // Package Repository
                             World.packageOrigin(hit.P, hit.o),
+                            m("code", { class: "blank" }, hit.L), // Package License
                         ]);
                     }),
                 );

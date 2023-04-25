@@ -1,0 +1,4 @@
+*.rsa.pub
+APKINDEX
+*.tar.gz
+*.tar
