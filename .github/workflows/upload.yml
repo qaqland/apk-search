@@ -1,0 +1,29 @@
+name: Upload APK
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # Run every day at midnight
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Generate data.json
+        run: python src/apk.py
+
+      - name: Upload to MeiliSearch
+        env:
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+        run: |
+          curl \
+            -H "Authorization: Bearer $ADMIN_API_KEY" \
+            -X POST 'https://ms-832666034d92-3329.sfo.meilisearch.io/indexes/apk/documents?primaryKey=id' \
+            -H 'Content-Type: application/json' --data-binary @data.json
