@@ -70,7 +70,7 @@ if count != 0:
     for index in resp["results"]:
         has_indexes.append(index.uid)
 
-indexes = glob.glob("*/main/*/APKINDEX.tar.gz", root_dir=path)
+indexes = glob.glob("*/community/*/APKINDEX.tar.gz", root_dir=path)
 if len(indexes) == 0:
     print(
         f'Nothing has been found in "{path}", make sure the path is like "HERE"/v3.18/main/x86_64/APKINDEX..'
@@ -87,7 +87,7 @@ settings = {
     ],
     "distinctAttribute": None,
     "faceting": {"maxValuesPerFacet": 100},
-    "filterableAttributes": ["build_time", "maintainer", "repository"],
+    "filterableAttributes": ["build_time", "maintainer", "repository", "id"],
     "pagination": {"maxTotalHits": 1000},
     "rankingRules": ["words", "typo", "attribute", "proximity", "sort", "exactness"],
     "searchableAttributes": ["package", "provides", "description"],

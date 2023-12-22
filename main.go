@@ -3,12 +3,12 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
-
-	// "encoding/json"
-	// "flag"
 	"encoding/gob"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,24 +16,19 @@ import (
 	"strings"
 
 	mapset "github.com/deckarep/golang-set/v2"
+	"github.com/meilisearch/meilisearch-go"
 )
 
 type Base struct {
-	Branch     string
-	Repository string
-	Arch       string
-	Path       string
-	IndexUID   string
-	LastSet    mapset.Set[string]
-	NextSet    mapset.Set[string]
-	Content    string
-	Packages   []*Package
-	temp       struct {
-		authors    map[string]Maintainer
-		re_author  *regexp.Regexp
-		requires   map[string]string
-		re_require *regexp.Regexp
-	}
+	Branch       string
+	Repository   string
+	Architecture string
+	RootPath     string
+	IndexUID     string
+	LastSet      mapset.Set[string]
+	NextSet      mapset.Set[string]
+	Content      string
+	Packages     []Package
 }
 
 var base Base
@@ -47,7 +42,6 @@ type Package struct {
 	InstalledSize int        `json:"installed_size"`
 	ProjectURL    string     `json:"project"`
 	License       string     `json:"license"`
-	NotSub        bool       `json:"not_sub"`
 	Origin        string     `json:"origin"`
 	Depends       []string   `json:"depends"`
 	Provides      []string   `json:"provides"`
@@ -62,47 +56,108 @@ type Maintainer struct {
 	Email string `json:"email"`
 }
 
-var test_path = "/home/qaq/rsync/v3.18/main/x86_64/APKINDEX.tar.gz"
+var (
+	key  string
+	url  string
+	path string
+)
 
-func locked(path string) bool {
-	_, err := os.Stat(path + "/cache.lock")
-	if os.IsNotExist(err) {
-		return false
+var (
+	authors    = map[string]Maintainer{}
+	re_author  = regexp.MustCompile(`^(\w+\s+\w+)\s+<(.+)>$`)
+	requires   = map[string]string{}
+	re_require = regexp.MustCompile(`(?:.*:)?([^=<>]*)`)
+)
+
+func (b *Base) Lock() {
+	_, err := os.Stat(b.RootPath + "/cache.lock")
+	if errors.Is(err, os.ErrNotExist) {
+		f, _ := os.Create(b.RootPath + "/cache.lock")
+		f.Close()
 	} else if err != nil {
-		fmt.Println(err)
+		log.Panicln(err)
 	} else {
-		fmt.Println(path, "lock")
+		log.Panicf("%s has been locked, wait existing process or remove cache.lock\n", path)
 	}
-	return true
+}
+
+func (b *Base) UnLock() {
+	os.Remove(b.RootPath + "/cache.lock")
+}
+
+func init() {
+	flag.StringVar(&url, "url", "http://localhost:7700", "meilisearch address")
+	flag.StringVar(&key, "key", "", "meilisearch master key")
+	flag.StringVar(&path, "path", "", "path of APKINDEX.tar.gz")
+	flag.Parse()
+
+	if key == "" || path == "" {
+		log.Panicln("KEY and PATH are required")
+	}
+
+	base.Init(path)
 }
 
 func main() {
-	base.Path = filepath.Dir(test_path)
-	fmt.Println(base.Path)
-	if locked(base.Path) {
-		os.Exit(1)
+	fmt.Println("Here", base.RootPath)
+	base.Lock()
+
+	if err := base.LoadCache(); err != nil {
+		log.Panicln(err)
 	}
-	defer os.Remove(base.Path + "/cache.lock")
-	base.Init()
-	base.LoadCache()
+
 	if err := base.Read(); err != nil {
-		fmt.Println(err)
-		return
+		log.Panicln(err)
 	}
 	count := base.Parse()
 	if count == 0 {
-		fmt.Println("Nothing to update")
+		log.Println("Nothing to update")
 		return
 	}
-	fmt.Printf("index [%s - %s]\tUpdate:\t%d\n", base.Branch, base.Arch, count)
-	fmt.Printf("%#v\n", base.Packages[100])
+	if err := base.SaveCache(); err != nil {
+		log.Panicln(err)
+	}
+
+	fmt.Printf("%9s in index %14s, updated with %5d, removed %5d, now a total of %5d\n",
+		base.Repository, base.IndexUID, count,
+		base.LastSet.Cardinality(), base.NextSet.Cardinality())
+
 	// connect meilisearch
+	client := meilisearch.NewClient(meilisearch.ClientConfig{
+		Host:   url,
+		APIKey: key,
+	})
+	if _, err := client.GetKeys(nil); err != nil {
+		log.Panicln(err)
+	}
+	delete_ids, _ := base.LastSet.MarshalJSON()
+	task1, err := client.Index(base.IndexUID).DeleteDocumentsByFilter("id IN " + string(delete_ids))
+	if err != nil {
+		fmt.Println(err)
+	}
+	task2, err := client.WaitForTask(task1.TaskUID)
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Println(task2)
+	task3, err := client.Index(base.IndexUID).AddDocuments(base.Packages)
+	if err != nil {
+		fmt.Println(err)
+	}
+	task4, err := client.WaitForTask(task3.TaskUID)
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Println(task4)
+
+	base.UnLock()
+	fmt.Println("Done", base.RootPath)
 }
 
 // empty when error
 func (b *Base) Read() error {
 	// file
-	file, err := os.Open(b.Path + "/APKINDEX.tar.gz")
+	file, err := os.Open(b.RootPath + "/APKINDEX.tar.gz")
 	if err != nil {
 		return err
 	}
@@ -137,25 +192,22 @@ func (b *Base) Read() error {
 		}
 	}
 }
+
 func (b *Base) Parse() int {
 	sections := strings.Split(strings.TrimRight(b.Content, "\n"), "\n\n")
-	outpkgs := make([]*Package, 0, len(sections))
+	out_pkgs := make([]Package, 0, len(sections))
 	for _, section := range sections {
 		pkg := parse_package(section)
 		if pkg == nil {
 			continue
 		}
-		// if len(outpkgs) == 3 {
-		// 	break
-		// }
-		outpkgs = append(outpkgs, pkg)
+		out_pkgs = append(out_pkgs, *pkg)
 	}
-	b.Packages = outpkgs
-	return len(outpkgs)
+	b.Packages = out_pkgs
+	return len(out_pkgs)
 }
+
 func parse_package(str string) *Package {
-	// fmt.Println(str)
-	// fmt.Println(base.NextSet.Cardinality())
 	pkg := Package{
 		Repository: base.Repository,
 	}
@@ -170,10 +222,11 @@ func parse_package(str string) *Package {
 		key, value := parts[0], parts[1]
 		switch key {
 		case "C":
-			pkg.CheckSum = value
-			if base.NotNew(value) {
+			uuid, old := base.NotNew(value)
+			if old {
 				return nil
 			}
+			pkg.CheckSum = uuid
 		case "P":
 			pkg.Name = value
 		case "V":
@@ -190,7 +243,6 @@ func parse_package(str string) *Package {
 			pkg.License = value
 		case "o":
 			pkg.Origin = value
-			pkg.NotSub = (pkg.Name == pkg.Origin)
 		case "m":
 			pkg.Maintainer = get_author(value)
 		case "t":
@@ -209,21 +261,23 @@ func parse_package(str string) *Package {
 	return &pkg
 }
 
-func (b *Base) NotNew(uuid string) bool {
+func (b *Base) NotNew(check_sum string) (string, bool) {
+	uuid := strings.TrimRight(check_sum, "=")[2:]
+	uuid = strings.ReplaceAll(uuid, "+", "-")
+	uuid = strings.ReplaceAll(uuid, "/", "_")
 	b.NextSet.Add(uuid)
 	if b.LastSet != nil && b.LastSet.Contains(uuid) {
 		b.LastSet.Remove(uuid)
-		return true
+		return uuid, true
 	}
-	return false
+	return uuid, false
 }
+
 func get_author(str string) Maintainer {
-	maintainer := base.temp.authors
-	re := base.temp.re_author
-	if value, ok := maintainer[str]; ok {
+	if value, ok := authors[str]; ok {
 		return value
 	}
-	match := re.FindStringSubmatch(str)
+	match := re_author.FindStringSubmatch(str)
 	if len(match) != 3 {
 		return Maintainer{}
 	}
@@ -233,75 +287,72 @@ func get_author(str string) Maintainer {
 		Name:  name,
 		Email: email,
 	}
-	maintainer[str] = author
+	authors[str] = author
 	return author
 }
 
 func get_require(str string) []string {
-	depends := base.temp.requires
-	re := base.temp.re_require
 	outputs := mapset.NewSet[string]()
 	inputs := strings.Split(str, " ")
 	for _, input := range inputs {
 		if outputs.Contains(input) {
 			continue
 		}
-		if value, ok := depends[input]; ok {
+		if value, ok := requires[input]; ok {
 			outputs.Add(value)
 			continue
 		}
-		match := re.FindStringSubmatch(input)
+		match := re_require.FindStringSubmatch(input)
 		if len(match) != 2 {
 			fmt.Println("regexp require fail:", input)
 			continue
 		}
-		depends[input] = match[1]
+		requires[input] = match[1]
 		outputs.Add(match[1])
 	}
 	return outputs.ToSlice()
 }
 
-func (b *Base) Init() {
-	// get author
-	b.temp.authors = map[string]Maintainer{}
-	b.temp.re_author = regexp.MustCompile(`^(\w+\s+\w+)\s+<(.+)>$`)
-	// get require
-	b.temp.requires = map[string]string{}
-	b.temp.re_require = regexp.MustCompile(`(?:.*:)?([^=<>]*)`)
-	// root path, but not init here
-	// b.Path = Dir(apkindex_path)
-	// branch, repository, arch
-	p := strings.Split(b.Path, string(filepath.Separator))
-	length := len(p)
-	b.Branch = p[length-1]
-	b.Repository = p[length-2]
-	b.Arch = p[length-3]
+func (b *Base) Init(path string) {
+	// root path, like /home/qaq/rsync/v3.19/main/aarch64
+	b.RootPath = filepath.Dir(path)
+
+	// branch, repository, architecture
+	patrs := strings.Split(b.RootPath, string(filepath.Separator))
+	length := len(patrs)
+	b.Architecture = patrs[length-1]
+	b.Repository = patrs[length-2]
+	b.Branch = patrs[length-3]
+
 	// search index name
-	b.IndexUID = fmt.Sprintf("%s-%s", b.Branch, strings.ReplaceAll(b.Arch, ".", "_"))
+	b.IndexUID = fmt.Sprintf("%s_%s", strings.ReplaceAll(b.Branch, ".", "_"), b.Architecture)
+
 	// NewSet for cache.gob
-	b.NextSet = mapset.NewSet[string]()
+	b.NextSet = mapset.NewThreadUnsafeSet[string]()
+	b.LastSet = mapset.NewThreadUnsafeSet[string]()
 }
-func (b *Base) LoadCache() {
-	f, err := os.Open(b.Path + "/cache.gob")
+
+func (b *Base) LoadCache() error {
+	f, err := os.Open(b.RootPath + "/cache.gob")
 	if os.IsNotExist(err) {
-		return
-	} else if err != nil {
-		fmt.Println(err)
-		return
+		return nil
+	}
+	if err != nil {
+		return err
 	}
 	defer f.Close()
 
 	decoder := gob.NewDecoder(f)
-	decoder.Decode(&b.LastSet) // TODO maybe bug
+	return decoder.Decode(&b.LastSet) // TODO maybe bug
 }
-func (b *Base) SaveCache() {
-	f, err := os.Create(b.Path + "/cache.gob")
+
+func (b *Base) SaveCache() error {
+	f, err := os.Create(b.RootPath + "/cache.gob")
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
 	defer f.Close()
 
 	encoder := gob.NewEncoder(f)
-	encoder.Encode(b.NextSet)
+	return encoder.Encode(b.NextSet)
 }
