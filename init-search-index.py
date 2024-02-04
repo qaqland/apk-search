@@ -4,7 +4,7 @@
 
 import argparse
 import glob, os, sys
-
+import json
 
 try:
     import meilisearch
@@ -81,9 +81,11 @@ settings = {
     "displayedAttributes": [
         "package",
         "version",
+        "repository",
         "description",
         "origin",
         "build_time",
+        "id", # react list need unique key
     ],
     "distinctAttribute": None,
     "faceting": {"maxValuesPerFacet": 100},
@@ -102,9 +104,12 @@ settings = {
     },
 }
 
+json_indexes = []
+
 for ipath in indexes:
     parts = ipath.split("/")
     index = f'{parts[-4].replace(".", "_")}_{parts[-2]}'
+    json_indexes.append({"arch":parts[-2], "branch":parts[-4]})
     if index in has_indexes:
         has_indexes.remove(index)
     task = client.index(index).update_settings(settings)
@@ -115,6 +120,10 @@ for ipath in indexes:
         sys.exit(1)
     else:
         print(f"{index:>16}: succeeded")
+
+json_data = json.dumps(json_indexes)
+with open('indexes.json', 'w') as file:
+    file.write(json_data)
 
 for index in has_indexes:
     print(f"Remove Unnecessary Index: {index}")

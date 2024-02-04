@@ -1,0 +1,5 @@
+.*
+log*
+aindex
+meilisearch
+indexes.json

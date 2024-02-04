@@ -2,19 +2,29 @@
 
 alpine linux package search online
 
-## APKINDEX Mirror(Alpine Linux)
+## Setup Alpine Linux Mirror
 
 cron & rsync
 
-## APKINDEX Parser
+## Build Parser AINDEX
 
 ```
 $ go build -o aindex main.go
 ```
 
-## Update Indexs(MeiliSearch)
+## Init Settings in Meilisearch
 
-Edit `Makefile` first.
+```
+$ ./init-search-index.py --help
+```
+
+It delete old indexs and create new based on rsync file tree.
+
+Move `indexes.json` to html's public dir
+
+## Update Indexs in MeiliSearch
+
+Look into `Makefile` first.
 
 ```
 $ make -j$(nproc)

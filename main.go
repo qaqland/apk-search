@@ -3,8 +3,8 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/gob"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -14,8 +14,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
-	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/meilisearch/meilisearch-go"
 )
 
@@ -25,8 +25,8 @@ type Base struct {
 	Architecture string
 	RootPath     string
 	IndexUID     string
-	LastSet      mapset.Set[string]
-	NextSet      mapset.Set[string]
+	LastSet      map[string]bool
+	NextSet      map[string]bool
 	Content      string
 	Packages     []Package
 }
@@ -34,7 +34,7 @@ type Base struct {
 var base Base
 
 type Package struct {
-	CheckSum      string     `json:"id"` // for search and react
+	CheckSum      string     `json:"id"` // for search and react list's key
 	Name          string     `json:"package"`
 	Version       string     `json:"version"`
 	Description   string     `json:"description"`
@@ -64,26 +64,10 @@ var (
 
 var (
 	authors    = map[string]Maintainer{}
-	re_author  = regexp.MustCompile(`^(\w+\s+\w+)\s+<(.+)>$`)
+	re_author  = regexp.MustCompile(`(.+)\s<(.+)>`)
 	requires   = map[string]string{}
 	re_require = regexp.MustCompile(`(?:.*:)?([^=<>]*)`)
 )
-
-func (b *Base) Lock() {
-	_, err := os.Stat(b.RootPath + "/cache.lock")
-	if errors.Is(err, os.ErrNotExist) {
-		f, _ := os.Create(b.RootPath + "/cache.lock")
-		f.Close()
-	} else if err != nil {
-		log.Panicln(err)
-	} else {
-		log.Panicf("%s has been locked, wait existing process or remove cache.lock\n", path)
-	}
-}
-
-func (b *Base) UnLock() {
-	os.Remove(b.RootPath + "/cache.lock")
-}
 
 func init() {
 	flag.StringVar(&url, "url", "http://localhost:7700", "meilisearch address")
@@ -96,11 +80,12 @@ func init() {
 	}
 
 	base.Init(path)
+	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
+	log.SetPrefix(base.RootPath + ": ")
 }
 
 func main() {
-	fmt.Println("Here", base.RootPath)
-	base.Lock()
+	log.Println("aindex start")
 
 	if err := base.LoadCache(); err != nil {
 		log.Panicln(err)
@@ -110,17 +95,15 @@ func main() {
 		log.Panicln(err)
 	}
 	count := base.Parse()
-	if count == 0 {
-		log.Println("Nothing to update")
-		return
-	}
 	if err := base.SaveCache(); err != nil {
 		log.Panicln(err)
 	}
 
-	fmt.Printf("%9s in index %14s, updated with %5d, removed %5d, now a total of %5d\n",
-		base.Repository, base.IndexUID, count,
-		base.LastSet.Cardinality(), base.NextSet.Cardinality())
+	log.Printf("new %d old %d to update, sum %d\n",
+		count, len(base.LastSet), len(base.NextSet))
+	if count == 0 {
+		return
+	}
 
 	// connect meilisearch
 	client := meilisearch.NewClient(meilisearch.ClientConfig{
@@ -130,28 +113,40 @@ func main() {
 	if _, err := client.GetKeys(nil); err != nil {
 		log.Panicln(err)
 	}
-	delete_ids, _ := base.LastSet.MarshalJSON()
-	task1, err := client.Index(base.IndexUID).DeleteDocumentsByFilter("id IN " + string(delete_ids))
-	if err != nil {
-		fmt.Println(err)
+	var (
+		task *meilisearch.TaskInfo
+		err  error
+	)
+	// custom time out
+	ctx, cancelFunc := context.WithTimeout(context.Background(), time.Minute)
+	defer cancelFunc()
+	option := meilisearch.WaitParams{
+		Context:  ctx,
+		Interval: time.Millisecond * 50,
 	}
-	task2, err := client.WaitForTask(task1.TaskUID)
-	if err != nil {
-		fmt.Println(err)
+	// delete old
+	delete_ids := make([]string, 0, len(base.LastSet))
+	for k := range base.LastSet {
+		delete_ids = append(delete_ids, k)
 	}
-	fmt.Println(task2)
-	task3, err := client.Index(base.IndexUID).AddDocuments(base.Packages)
+	task, err = client.Index(base.IndexUID).DeleteDocumentsByFilter(
+		fmt.Sprintf(`id IN [%s]`, strings.Join(delete_ids, `,`)))
 	if err != nil {
-		fmt.Println(err)
+		log.Panicln(err)
 	}
-	task4, err := client.WaitForTask(task3.TaskUID)
+	if _, err := client.WaitForTask(task.TaskUID, option); err != nil {
+		log.Panicln(err)
+	}
+	// add new
+	task, err = client.Index(base.IndexUID).AddDocuments(base.Packages)
 	if err != nil {
-		fmt.Println(err)
+		log.Panicln(err)
 	}
-	fmt.Println(task4)
+	if _, err := client.WaitForTask(task.TaskUID, option); err != nil {
+		log.Panicln(err)
+	}
 
-	base.UnLock()
-	fmt.Println("Done", base.RootPath)
+	log.Println("Done")
 }
 
 // empty when error
@@ -216,14 +211,14 @@ func parse_package(str string) *Package {
 		line = strings.TrimSpace(line)
 		parts := strings.SplitN(line, ":", 2)
 		if len(parts) != 2 {
-			fmt.Println("length of part is not two?")
+			log.Println("length of part is not two?")
 			return nil
 		}
 		key, value := parts[0], parts[1]
 		switch key {
 		case "C":
-			uuid, old := base.NotNew(value)
-			if old {
+			uuid, is_old := base.SetCache(value)
+			if is_old {
 				return nil
 			}
 			pkg.CheckSum = uuid
@@ -254,21 +249,22 @@ func parse_package(str string) *Package {
 		case "p":
 			pkg.Provides = get_require(value)
 		default:
-			// fmt.Println("parser key, continue:", key)
+			// log.Println("parser key, continue:", key)
 			continue
 		}
 	}
 	return &pkg
 }
 
-func (b *Base) NotNew(check_sum string) (string, bool) {
+func (b *Base) SetCache(check_sum string) (string, bool) {
 	uuid := strings.TrimRight(check_sum, "=")[2:]
 	uuid = strings.ReplaceAll(uuid, "+", "-")
 	uuid = strings.ReplaceAll(uuid, "/", "_")
-	b.NextSet.Add(uuid)
-	if b.LastSet != nil && b.LastSet.Contains(uuid) {
-		b.LastSet.Remove(uuid)
-		return uuid, true
+	b.NextSet[uuid] = true
+	// if this package is exists in cache
+	if b.LastSet[uuid] {
+		delete(b.LastSet, uuid) // remove it from last set
+		return uuid, true       // it is old and we should skip
 	}
 	return uuid, false
 }
@@ -292,25 +288,29 @@ func get_author(str string) Maintainer {
 }
 
 func get_require(str string) []string {
-	outputs := mapset.NewSet[string]()
+	names := make(map[string]bool)
 	inputs := strings.Split(str, " ")
 	for _, input := range inputs {
-		if outputs.Contains(input) {
+		if names[input] {
 			continue
 		}
 		if value, ok := requires[input]; ok {
-			outputs.Add(value)
+			names[value] = true
 			continue
 		}
 		match := re_require.FindStringSubmatch(input)
 		if len(match) != 2 {
-			fmt.Println("regexp require fail:", input)
+			log.Println("regexp require fail case", input)
 			continue
 		}
 		requires[input] = match[1]
-		outputs.Add(match[1])
+		names[match[1]] = true
 	}
-	return outputs.ToSlice()
+	outputs := make([]string, 0, len(names))
+	for name := range names {
+		outputs = append(outputs, name)
+	}
+	return outputs
 }
 
 func (b *Base) Init(path string) {
@@ -325,11 +325,12 @@ func (b *Base) Init(path string) {
 	b.Branch = patrs[length-3]
 
 	// search index name
-	b.IndexUID = fmt.Sprintf("%s_%s", strings.ReplaceAll(b.Branch, ".", "_"), b.Architecture)
+	b.IndexUID = fmt.Sprintf("%s_%s",
+		strings.ReplaceAll(b.Branch, ".", "_"), b.Architecture)
 
 	// NewSet for cache.gob
-	b.NextSet = mapset.NewThreadUnsafeSet[string]()
-	b.LastSet = mapset.NewThreadUnsafeSet[string]()
+	b.NextSet = make(map[string]bool)
+	b.LastSet = make(map[string]bool)
 }
 
 func (b *Base) LoadCache() error {
@@ -343,7 +344,7 @@ func (b *Base) LoadCache() error {
 	defer f.Close()
 
 	decoder := gob.NewDecoder(f)
-	return decoder.Decode(&b.LastSet) // TODO maybe bug
+	return decoder.Decode(&b.LastSet)
 }
 
 func (b *Base) SaveCache() error {
