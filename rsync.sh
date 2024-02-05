@@ -19,3 +19,9 @@ rsync \
     $src $des
 
 # --delete \
+
+# example make running:
+# MIRROR_DIR=$des \
+# MASTER_KEY=1234567890 \
+# AINDEX_BIN=/home/qaq/projects/apkindex/aindex \
+# make -f /home/qaq/Makefile

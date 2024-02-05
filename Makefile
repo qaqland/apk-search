@@ -11,8 +11,9 @@ CACHES := $(INDEXS:%APKINDEX.tar.gz=%cache.gob)
 
 all: $(CACHES)
 
+# sleep is needed on low performance server
 %cache.gob: %APKINDEX.tar.gz
-	@$(AINDEX_BIN) -path $< -key $(MASTER_KEY) -url $(SEARCH_URL)
+	@$(AINDEX_BIN) -path $< -key $(MASTER_KEY) -url $(SEARCH_URL); sleep 60
 
 .PHONY: clean
 clean:

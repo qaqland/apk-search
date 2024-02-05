@@ -118,11 +118,11 @@ func main() {
 		err  error
 	)
 	// custom time out
-	ctx, cancelFunc := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancelFunc := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancelFunc()
 	option := meilisearch.WaitParams{
 		Context:  ctx,
-		Interval: time.Millisecond * 50,
+		Interval: time.Millisecond * 100,
 	}
 	// delete old
 	delete_ids := make([]string, 0, len(base.LastSet))

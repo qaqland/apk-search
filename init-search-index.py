@@ -6,14 +6,8 @@ import argparse
 import glob, os, sys
 import json
 
-try:
-    import meilisearch
-except:
-    print("Install meilisearch package of python")
-    os.system("pip install meilisearch")
-    import meilisearch
-finally:
-    from meilisearch.errors import MeilisearchError
+import meilisearch
+from meilisearch.errors import MeilisearchError
 
 parser = argparse.ArgumentParser(
     description="init meilisearch indexes(settings) and delete old",
@@ -44,23 +38,26 @@ except MeilisearchError as e:
 
 has_key = False
 for key in resp.results:
-    if len(key.actions) != 1 or key.actions[0] != "search":
+    if len(key.actions) != 2:
+        continue
+    actions = sorted(key.actions)
+    if actions[0] != "documents.get" or actions[1] != "search":
         continue
     if key.indexes[0] != "*":
         continue
     has_key = True
-    print(f"Search Key: {key.key}")
+    print(f"HTML Key: {key.key}")
 
 if not has_key:
     resp = client.create_key(
         options={
-            "description": "Search API Key",
-            "actions": ["search"],
+            "description": "API Key: Search and Get Details",
+            "actions": ["search", "documents.get"],
             "indexes": ["*"],
             "expiresAt": None,
         }
     )
-    print(f"Search Key: {resp.key} (New)")
+    print(f"HTML Key: {resp.key} (New)")
 
 resp = client.get_indexes()
 count = resp["total"]
@@ -85,7 +82,7 @@ settings = {
         "description",
         "origin",
         "build_time",
-        "id", # react list need unique key
+        "id",  # react list need unique key
     ],
     "distinctAttribute": None,
     "faceting": {"maxValuesPerFacet": 100},
@@ -109,7 +106,7 @@ json_indexes = []
 for ipath in indexes:
     parts = ipath.split("/")
     index = f'{parts[-4].replace(".", "_")}_{parts[-2]}'
-    json_indexes.append({"arch":parts[-2], "branch":parts[-4]})
+    json_indexes.append({"arch": parts[-2], "branch": parts[-4]})
     if index in has_indexes:
         has_indexes.remove(index)
     task = client.index(index).update_settings(settings)
@@ -122,8 +119,9 @@ for ipath in indexes:
         print(f"{index:>16}: succeeded")
 
 json_data = json.dumps(json_indexes)
-with open('indexes.json', 'w') as file:
+with open("indexes.json", "w") as file:
     file.write(json_data)
+    print("Write Indexes to indexes.json")
 
 for index in has_indexes:
     print(f"Remove Unnecessary Index: {index}")
