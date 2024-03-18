@@ -1,5 +1,7 @@
 # Apk-Search
 
+**MOVE TO https://gitlab.alpinelinux.org/qaqland/apk-search**
+
 alpine linux package search online
 
 ## Setup Alpine Linux Mirror
